@@ -1,0 +1,22 @@
+name: Security Scan Scheduler CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:6.0
+        ports:
+          - 27017:27017
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run:  pip install -r requirements.txt
+      - name: Test with pytest
+        env: |
+          MONGO_URL=mongodb://localhost:27017
+        run:  pytest
