@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, Dict, Any
 from bson import ObjectId
+
 
 class PyObjectId(ObjectId):
     @classmethod
@@ -10,26 +11,27 @@ class PyObjectId(ObjectId):
     @classmethod
     def validate(cls, v):
         if not ObjectId.is_valid(v):
-            raise ValueError("Invalid ObjectId")
+            raise ValueError("Invalid objectid")
         return ObjectId(v)
-    
+
     @classmethod
     def __get_pydantic_json_schema__(cls, _schema_generator):
-        return {"type": "string"}   
-    
+        return {"type": "string"}
+
+
 class ScanRequest(BaseModel):
-    target: str
+    target_url: str
+
 
 class ScanUpdate(BaseModel):
     status: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
 
-class ScanResponse(BaseModel):        
+
+class ScanResponse(BaseModel):
     id: str = Field(alias="_id")
     target_url: str
     status: str = "pending"
-    results: Optional[Dict[str, Any]] = None
+    result: Optional[Dict[str, Any]] = None
 
-class Config:
-    populate_by_name = True
-    json_encoders = {ObjectId: str}
+    model_config = ConfigDict(populate_by_name=True)

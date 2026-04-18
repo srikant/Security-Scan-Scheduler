@@ -5,83 +5,133 @@ from httpx import AsyncClient, ASGITransport
 from app.main import app
 from app.database import connect_to_mongo, close_mongo_connection, get_database
 from app.scanner import mock_security_scan
-from motor.motor_asyncio import AsyncIOMotorClient  
+from motor.motor_asyncio import AsyncIOMotorClient
 
-# TEST FIXTURES - Setup and Teardown
+
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def setup_db():
     await connect_to_mongo()
     yield
     await close_mongo_connection()
 
+
 @pytest_asyncio.fixture(scope="function")
 async def client():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
-# Test 1: Create Scan Endpoint
+
+# TEST 1: Can we submit a scan request?
 @pytest.mark.asyncio
 async def test_create_scan(client):
-    payload = {"target": "http://hackthissite.org"}
+    payload = {"target_url": "https://hackthissite.org"}
+
     response = await client.post("/scans", json=payload)
+
+    # Assertions (The SPEC)
     assert response.status_code == 200
     data = response.json()
-    assert data["target_url"] == "http://hackthissite.org"
+    assert data["target_url"] == "https://hackthissite.org"
     assert data["status"] == "pending"
-    assert "id" in data
-    assert len(data["id"]) == 24
+    assert "_id" in data
+    assert len(data["_id"]) == 24  # MongoDB ObjectId length
 
-# Test 2: Retrieve Scan by ID
+
+# TEST 2: Can we retrieve a scan by ID?
 @pytest.mark.asyncio
 async def test_get_scan_by_id(client):
-    # Step1: First, create a scan
-    payload = {"target": "http://hackthissite.org"}
+    # 1. First, create a scan so we have an ID to fetch
+    payload = {"target_url": "https://testsite.com"}
     create_res = await client.post("/scans", json=payload)
-    scan_id = create_res.json()["id"]
+    scan_id = create_res.json()["_id"]
 
-    # Step 2: Retrieve the scan by ID
+    # 2. Now fetch it
     response = await client.get(f"/scans/{scan_id}")
 
-    # Verify successful retrieval
-    assert response.status_code == 200, "Should find existing scan"
-
-    # Verify the retrieved data matches what was created
+    assert response.status_code == 200
     data = response.json()
-    assert data["target_url"] == "http://hackthissite.org", "URL should match"
-    assert data["id"] == scan_id, "IDs should match"
+    assert data["target_url"] == "https://testsite.com"
+    assert data["_id"] == scan_id
 
-# Test 3: Retrieve Non-Existent Scan
+
+# TEST 3: Test not found scan
 @pytest.mark.asyncio
-async def test_get_scan_not_found(client):    
-    fake_id = "60d5f4832f8fb814c8a1b234"  # Random ObjectId
+async def test_get_scan_not_found(client):
+    fake_id = "507f1f77bcf86cd799439011"  # Valid format, but not in DB
     response = await client.get(f"/scans/{fake_id}")
     assert response.status_code == 404
     assert response.json()["detail"] == "Scan not found"
 
-# Test 4: Update Scan Results (Internal Endpoint)
-@pytest.mark.asyncio
-async def test_update_scan_results(client):
-    # Step 1: Create a scan
-    payload = {"target_url": "http://vulnerable-site.local"}
-    create_res = await client.post("/scans", json=payload)
-    scan_id = create_res.json()["id"]
 
-    # Step 2: Update the scan results
+# TEST 4: Update scan result (internal use by scanner)
+@pytest.mark.asyncio
+async def test_update_scan_result(client):
+    # 1. Create a scan to update
+    payload = {"target_url": "https://vulnerable-site.local"}
+    create_res = await client.post("/scans", json=payload)
+    scan_id = create_res.json()["_id"]
+
+    # 2. Simulate scan result data (what background task would generate)
     update_payload = {
         "status": "completed",
-        "results": {
-            "scan_time": "2024-06-01T12:00:00Z",
-            "vulnerabilities_found": [ "XSS", "Open Port 22"],
-            "risk_score": 75
-        }
+        "result": {
+            "scan_time": "2024-01-01T00:00:00",
+            "risk_score": 75,
+            "vulnerabilities_found": ["XSS", "Open Port 22"],
+        },
     }
 
+    # 3. PUT to update
     response = await client.put(f"/scans/{scan_id}", json=update_payload)
+    assert response.status_code == 200
 
-    # Verify successful update
-    assert response.status_code == 200, "Update should succeed"
-    
+    # 4. Verify update with GET
     get_res = await client.get(f"/scans/{scan_id}")
     data = get_res.json()
-    assert data["status"] == "completed", "Status should be updated"
-    assert data["results"]["risk_score"] == 75, "Risk score should match"
+    assert data["status"] == "completed"
+    assert data["result"]["risk_score"] == 75
+
+
+# TEST 5: End-to-End test for full scan lifecycle
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_full_scan_lifecycle_e2e(client):
+    """
+    E2E Test: Submit a scan, poll for completion, verify result.
+    """
+    # 1. Submit scan
+    payload = {"target_url": "https://testphp.vulnweb.com"}
+    post_res = await client.post("/scans", json=payload)
+    assert post_res.status_code == 200
+    scan_id = post_res.json()["_id"]
+
+    # 2. Poll for completion (max 15 seconds)
+    max_polls = 15
+    status = "pending"
+
+    for _ in range(max_polls):
+        await asyncio.sleep(1)  # Wait 1 second between polls
+        get_res = await client.get(f"/scans/{scan_id}")
+        assert get_res.status_code == 200
+        data = get_res.json()
+        status = data["status"]
+        if status != "pending":
+            break
+
+    # 3. Assert final state
+    assert status == "completed"
+    assert "result" in data
+    assert "vulnerabilities_found" in data["result"]
+    # Since URL contains testphp, we expect at least one vuln
+    assert len(data["result"]["vulnerabilities_found"]) > 0
+
+
+# TEST 6: Test mock scanner function directly
+@pytest.mark.asyncio
+async def test_mock_scanner():
+    result = await mock_security_scan("https://testphp.example.com")
+    assert "scan_time" in result
+    assert "status_code" in result
+    assert "vulnerabilities_found" in result
+    assert "risk_score" in result
+    assert isinstance(result["vulnerabilities_found"], list)
