@@ -20,12 +20,16 @@ class PyObjectId(ObjectId):
 class ScanRequest(BaseModel):
     target: str
 
+class ScanUpdate(BaseModel):
+    status: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+
 class ScanResponse(BaseModel):        
     id: str = Field(alias="_id")
     target_url: str
     status: str = "pending"
     results: Optional[Dict[str, Any]] = None
 
-    class Config:
-        populate_by_name = True
-        json_encoders = {ObjectId: str}
+class Config:
+    populate_by_name = True
+    json_encoders = {ObjectId: str}

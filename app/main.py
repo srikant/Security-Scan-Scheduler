@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from contextlib import asynccontextmanager
 
 from app.database import connect_to_mongo, close_mongo_connection, get_database
-from app.models import ScanRequest, ScanResponse
+from app.models import ScanRequest, ScanUpdate, ScanResponse
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
@@ -32,3 +32,41 @@ async def create_scan(scan_req: ScanRequest, background_tasks: BackgroundTasks, 
     #background_tasks.add_task(run_scan, scan_id)
 
     return new_scan
+
+@app.get("/scans/{scan_id}", response_model=ScanResponse)
+async def get_scan(scan_id: str, db: AsyncIOMotorDatabase = Depends(get_database)):
+    if not ObjectId.is_valid(scan_id):
+        raise HTTPException(status_code=400, detail="Invalid scan ID format")
+    
+    scan = await db["scans"].find_one({"_id": ObjectId(scan_id)})
+    
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    
+    scan["_id"] = str(scan["_id"])
+    return scan
+
+@app.put("/scans/{scan_id}")
+async def update_scan_result(scan_id: str, update: ScanUpdate, db: AsyncIOMotorDatabase = Depends(get_database)):
+    if not ObjectId.is_valid(scan_id):
+        raise HTTPException(status_code=400, detail="Invalid scan ID format")
+
+    update_data = {}
+    if update.status is not None:
+        update_data["status"] = update.status
+    if update.result is not None:
+        update_data["result"] = update.result
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    result = await db["scans"].update_one(
+        {"_id": ObjectId(scan_id)},
+        {"$set": update_data}
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    
+    return {"message": "Scan updated successfully"}

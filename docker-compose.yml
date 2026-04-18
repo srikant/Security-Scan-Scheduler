@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mongodb:
     image: mongo:6.0
@@ -8,7 +6,7 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
-  
+
   api:
     build: .
     container_name: scan_api
@@ -17,9 +15,7 @@ services:
     depends_on:
       - mongodb
     environment:
-      - MONGO_URL=mongodb://mongodb:27017
-    volumes:
-      - ./app:/app
+      - MONGODB_URL=mongodb://mongodb:27017
 
 volumes:
   mongo_data:
